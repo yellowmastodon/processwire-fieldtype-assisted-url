@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Class InputfieldAssistedURL
  *
@@ -11,10 +12,13 @@
  * @filesource
  */
 
+use ProcessWire\RockPageBuilder;
+
 /**
  * Class InputfieldAssistedURL
  */
-class InputfieldAssistedURL extends Inputfield {
+class InputfieldAssistedURL extends Inputfield
+{
 
     /**
      * @var Page
@@ -26,7 +30,8 @@ class InputfieldAssistedURL extends Inputfield {
      *
      * @return array
      */
-    public static function getModuleInfo() {
+    public static function getModuleInfo()
+    {
         return [
             'title' => 'AssistedURL Input',
             'version' => '2.0.2',
@@ -41,14 +46,16 @@ class InputfieldAssistedURL extends Inputfield {
      *
      * @param Page $page
      */
-    public function setPage(Page $page) {
+    public function setPage(Page $page)
+    {
         $this->page = $page;
     }
 
     /**
      * Render the entire input area for Events
      */
-    public function ___render() {
+    public function ___render()
+    {
 
         // Use a plain text input rather than InputfieldURL so the browser's
         // type="url" validation doesn't reject bare fragment links (e.g. "#anchor").
@@ -61,8 +68,12 @@ class InputfieldAssistedURL extends Inputfield {
         $btn->attr('id', $this->attr('name') . "_assistedurl_open");
         $page = $this->page;
         $n = 0;
-        while(wireInstanceOf($page, 'RepeaterPage') && ++$n < 10) {
-            $page = $page->getForPage();
+        while ((wireInstanceOf($page, 'RepeaterPage') || $page instanceof \RockPageBuilder\Block) && ++$n < 10) {
+            if ($page instanceof \RockPageBuilder\Block) {
+                $page = $page->getBlockPage();
+            } else {
+                $page = $page->getForPage();
+            }
         }
         $btn->attr('data-page-id', $page->id);
         $btn->class .= " InputfieldAssistedURLOpen";
