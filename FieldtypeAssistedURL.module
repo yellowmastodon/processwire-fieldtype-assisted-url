@@ -44,10 +44,30 @@ class FieldtypeAssistedURL extends FieldtypeURL {
      * The parent FieldtypeURL sanitizer would otherwise blank them.
      */
     public function sanitizeValue(Page $page, Field $field, $value) {
-        if(is_string($value) && preg_match('/^#[A-Za-z0-9\-_.:]+$/', $value)) {
-            return $value;
+        if(!is_string($value)) $value = (string) $value;
+        $value = trim($value);
+        if($value === '') return '';
+        $sanitized = '';
+        if(preg_match('/^#[A-Za-z0-9\-_.:]+$/', $value)) return $value;
+
+        try {
+            $sanitized = $this->wire('sanitizer')->url($value, [
+                'allowRelative' => $field->get('noRelative') ? false : true,
+                'allowIDN' => $field->get('allowIDN') ? true : false,
+                'allowSchemes' => ['http', 'https', 'ftp', 'tel', 'mailto'],
+                'stripQuotes' => $field->get('allowQuotes') ? false : true,
+                'throw' => true,
+            ]);
+        } catch (\Throwable $e) {
+            $this->error(
+                sprintf($this->_('Invalid URL "%s": %s'), $value, $e->getMessage())
+            );
         }
-        return parent::sanitizeValue($page, $field, $value);
+
+        if($sanitized === '') {
+            $this->error(sprintf($this->_('Invalid URL "%s"'), $value));
+        }
+        return $sanitized;
     }
 
     /**
@@ -71,8 +91,13 @@ class FieldtypeAssistedURL extends FieldtypeURL {
      */
     public function ___wakeupValue(Page $page, Field $field, $value) {
         $urlParts = explode("?", $value);
-        if(is_numeric($urlParts[0])) {
-            $return = $this->wire('pages')->get($urlParts[0])->url . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
+        if(ctype_digit((string) $urlParts[0])) {
+            $linkedPage = $this->wire('pages')->get((int) $urlParts[0]);
+            if($linkedPage->id) {
+                $return = $linkedPage->url . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
+            } else {
+                $return = $value;
+            }
         }
         else {
             $return = $value;
@@ -93,28 +118,32 @@ class FieldtypeAssistedURL extends FieldtypeURL {
                 $value = preg_replace('#^https?://#', '', $value);
             }
         }
-        if(strpos($value, '//') === false && strpos($value, 'mailto:') === false && strpos($value, '#') !== 0) {
-            $urlParts = explode("?", $value);
 
-            if($this->wire('config')->urls->root !== '/') {
-                $urlPage = "/" . str_replace($this->wire('config')->urls->root, "", $urlParts[0]);
-            }
-            else {
-                $urlPage = $urlParts[0];
-            }
+        $urlParts = explode("?", $value, 2);
+        $path = $urlParts[0];
+        $root = rtrim((string) $this->wire('config')->urls->root, '/');
 
-            $p = $this->wire('pages')->get(trim($urlPage, '.'));
-            if($p->id) {
-                $return = $p->id . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
-            }
-            else {
-                $return = $value;
-            }
+        $isLocalPath = str_starts_with($path, '/')
+            || ($root !== '' && str_starts_with($path, $root));
+
+        if(!$isLocalPath || preg_match('#^[a-z][a-z0-9+.-]*:#i', $path)) {
+            return $value;
         }
-        else {
-            $return = $value;
+
+        if($root !== '' && str_starts_with($path, $root)) {
+            $urlPage = substr($path, strlen($root));
+            if($urlPage === '') $urlPage = '/';
+        } elseif(str_starts_with($path, '/')) {
+            $urlPage = $path;
+        } else {
+            $urlPage = '/' . $path;
         }
-        return $return;
+
+        $p = $this->wire('pages')->get($urlPage);
+        if($p->id) {
+            return $p->id . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
+        }
+        return $value;
     }
 
 }
