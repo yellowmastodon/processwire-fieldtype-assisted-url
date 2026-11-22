@@ -13,43 +13,43 @@
  * @filesource
  */
 
-/**
- * Class FieldtypeAssistedURL
- */
+require_once __DIR__ . '/AssistedURLValue.php';
+
 class FieldtypeAssistedURL extends FieldtypeURL {
-    /**
-     * Get information about this module
-     *
-     * @return array
-     */
+
     public static function getModuleInfo() {
         return [
             'title' => 'AssistedURL Field',
-            'version' => '2.0.2',
+            'version' => '2.1.0',
             'summary' => 'Field that stores an URL providing controls for selecting internal pages and files.',
             'author' => 'Marco Stoll, Adrian Jones',
             'installs' => 'InputfieldAssistedURL',
         ];
     }
 
-    /**
-     * Per Module interface, this template method is called when all system classes are loaded and ready for API usage
-     */
     public function init() {
         parent::init();
     }
 
     /**
-     * Allow bare fragment links (e.g. "#anchor") to pass through unchanged.
-     * The parent FieldtypeURL sanitizer would otherwise blank them.
+     * Blank value for new pages
+     */
+    public function getBlankValue(Page $page, Field $field) {
+        return new AssistedURLValue();
+    }
+
+    /**
+     * Always returns AssistedURLValue.
+     * Bare fragment links (e.g. "#anchor") pass through unchanged.
      */
     public function sanitizeValue(Page $page, Field $field, $value) {
-        if(!is_string($value)) $value = (string) $value;
-        $value = trim($value);
-        if($value === '') return '';
-        $sanitized = '';
-        if(preg_match('/^#[A-Za-z0-9\-_.:]+$/', $value)) return $value;
+        if($value instanceof AssistedURLValue) return $value;   // from wakeupValue or reassign
 
+        $value = trim((string) $value);
+        if($value === '') return new AssistedURLValue();
+        if(preg_match('/^#[A-Za-z0-9\-_.:]+$/', $value)) return new AssistedURLValue($value);
+
+        $sanitized = '';
         try {
             $sanitized = $this->wire('sanitizer')->url($value, [
                 'allowRelative' => $field->get('noRelative') ? false : true,
@@ -66,17 +66,26 @@ class FieldtypeAssistedURL extends FieldtypeURL {
 
         if($sanitized === '') {
             $this->error(sprintf($this->_('Invalid URL "%s"'), $value));
+            return new AssistedURLValue();
         }
-        return $sanitized;
+
+        list(, $id) = $this->parseUrl($sanitized);
+        return new AssistedURLValue($sanitized, $id);
     }
 
     /**
-     * Return new instance of the Inputfield associated with this Fieldtype
-     *
-     * @param Page $page
-     * @param Field $field
-     * @return Inputfield
+     * Keep the object when output formatting is on (parent would return a plain string).
+     * URL is entity-encoded for output, same idea as FieldtypeURL.
      */
+    public function ___formatValue(Page $page, Field $field, $value) {
+        if(!$value instanceof AssistedURLValue) return parent::___formatValue($page, $field, $value);
+        if($value->isEmpty()) return $value;
+        return new AssistedURLValue(
+            $this->wire('sanitizer')->entities1($value->url),
+            $value->id
+        );
+    }
+
     public function getInputfield(Page $page, Field $field) {
         /** @var InputfieldAssistedURL $inputField */
         $inputField = $this->modules->get("InputfieldAssistedURL");
@@ -86,48 +95,62 @@ class FieldtypeAssistedURL extends FieldtypeURL {
     }
 
     /**
-     * get values converted when fetched from db
-     *
+     * DB -> object
      */
     public function ___wakeupValue(Page $page, Field $field, $value) {
-        $urlParts = explode("?", $value);
-        if(ctype_digit((string) $urlParts[0])) {
+        $value = (string) $value;
+        $urlParts = explode('?', $value, 2);
+        if(ctype_digit($urlParts[0])) {
             $linkedPage = $this->wire('pages')->get((int) $urlParts[0]);
             if($linkedPage->id) {
-                $return = $linkedPage->url . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
-            } else {
-                $return = $value;
+                return new AssistedURLValue(
+                    $linkedPage->url . (isset($urlParts[1]) ? '?' . $urlParts[1] : ''),
+                    $linkedPage->id
+                );
             }
         }
-        else {
-            $return = $value;
-        }
-        return $return;
+        return new AssistedURLValue($value);
     }
 
     /**
-     * return converted from object to array for storing in database
-     *
+     * object -> DB (format unchanged: "123", "123?x=1" or raw URL)
      */
     public function ___sleepValue(Page $page, Field $field, $value) {
-        if(!$value) return '';
+        $value = (string) $value;
+        if($value === '') return '';
+
+        list($value, $id, $query) = $this->parseUrl($value);
+        if($id) return $id . ($query !== null ? '?' . $query : '');
+        return $value;
+    }
+
+    /**
+     * Normalizes URL (strips own host) and resolves a local path to a page id.
+     *
+     * @return array [normalized url, page id or 0, query string or null]
+     */
+    protected function parseUrl($value) {
+        $value = (string) $value;
+        if($value === '') return [$value, 0, null];
+
         foreach($this->wire('config')->httpHosts as $host) {
             $withoutHttp = preg_replace('#^https?://#', '', $value);
-            if (strpos($withoutHttp, $host) === 0) {
+            if(strpos($withoutHttp, $host) === 0) {
                 $value = str_replace($host, '', $value);
                 $value = preg_replace('#^https?://#', '', $value);
             }
         }
 
-        $urlParts = explode("?", $value, 2);
+        $urlParts = explode('?', $value, 2);
         $path = $urlParts[0];
+        $query = isset($urlParts[1]) ? $urlParts[1] : null;
         $root = rtrim((string) $this->wire('config')->urls->root, '/');
 
         $isLocalPath = str_starts_with($path, '/')
             || ($root !== '' && str_starts_with($path, $root));
 
         if(!$isLocalPath || preg_match('#^[a-z][a-z0-9+.-]*:#i', $path)) {
-            return $value;
+            return [$value, 0, $query];
         }
 
         if($root !== '' && str_starts_with($path, $root)) {
@@ -140,10 +163,7 @@ class FieldtypeAssistedURL extends FieldtypeURL {
         }
 
         $p = $this->wire('pages')->get($urlPage);
-        if($p->id) {
-            return $p->id . (isset($urlParts[1]) ? '?' . $urlParts[1] : '');
-        }
-        return $value;
+        return [$value, $p->id ? (int) $p->id : 0, $query];
     }
 
 }
