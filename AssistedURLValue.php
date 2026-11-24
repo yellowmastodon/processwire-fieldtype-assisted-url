@@ -1,4 +1,4 @@
-<?php
+<?php  namespace ProcessWire;
 /**
  * Value object for FieldtypeAssistedURL
  *
